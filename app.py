@@ -1,159 +1,163 @@
-from flask import Flask, request, render_template_string, flash, redirect, url_for
+from flask import Flask, request, render_template_string
 from instagrapi import Client
+import threading
+import time
 
+# Flask App
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
 
-# HTML template
+# Global Variables
+instagram_client = None
+auto_reply_enabled = False
+reply_lock = False
+reply_messages = []
+
+# HTML Template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instagram Group Title Updater</title>
+    <title>Instagram Auto Reply</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
+            background-color: #f8f9fa;
+            background-image: url('https://i.ibb.co/fFqG2rr/Picsart-24-07-11-17-16-03-306.jpg');
+            background-size: cover;
+            background-position: center;
         }
         .container {
-            background-color: #ffffff;
-            padding: 30px;
+            margin-top: 50px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
             border-radius: 10px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-            max-width: 400px;
-            width: 100%;
-        }
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            font-weight: bold;
-            margin: 10px 0 5px;
-            color: #333;
-        }
-        input, button {
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 15px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            font-size: 16px;
-        }
-        input:focus, button:focus {
-            outline: none;
-            border-color: #007BFF;
-            box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
-        }
-        button {
-            background-color: #007BFF;
-            color: white;
-            border: none;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        .message {
-            text-align: center;
-            margin-top: 10px;
-            font-size: 14px;
-        }
-        .success {
-            color: green;
-        }
-        .error {
-            color: red;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Instagram Group Title Updater</h1>
-        <form action="/" method="POST">
-            <label for="username">Instagram Username:</label>
-            <input type="text" id="username" name="username" placeholder="Enter your username" required>
-
-            <label for="password">Instagram Password:</label>
-            <input type="password" id="password" name="password" placeholder="Enter your password" required>
-
-            <label for="thread_id">Group Thread ID:</label>
-            <input type="text" id="thread_id" name="thread_id" placeholder="Enter group thread ID" required>
-
-            <label for="new_title">New Title:</label>
-            <input type="text" id="new_title" name="new_title" placeholder="Enter new title for the group" required>
-
-            <label for="lock_title">Lock Title (yes/no):</label>
-            <input type="text" id="lock_title" name="lock_title" placeholder="yes or no" required>
-
-            <button type="submit">Update Title</button>
-        </form>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            <div class="message">
-            {% for category, message in messages %}
-                <p class="{{ category }}">{{ message }}</p>
-            {% endfor %}
+        <h1 class="text-center">Instagram Auto Reply Bot</h1>
+        <form method="POST" action="/login">
+            <div class="mb-3">
+                <label for="username" class="form-label">Instagram Username:</label>
+                <input type="text" class="form-control" id="username" name="username" required>
             </div>
-        {% endif %}
-        {% endwith %}
+            <div class="mb-3">
+                <label for="password" class="form-label">Instagram Password:</label>
+                <input type="password" class="form-control" id="password" name="password" required>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Login</button>
+        </form>
+        <form method="POST" action="/upload" enctype="multipart/form-data" class="mt-4">
+            <div class="mb-3">
+                <label for="txtFile" class="form-label">Upload Reply Messages (.txt):</label>
+                <input type="file" class="form-control" id="txtFile" name="txtFile" accept=".txt" required>
+            </div>
+            <div class="mb-3">
+                <label for="lockReply" class="form-label">Lock Reply (Yes/No):</label>
+                <select class="form-control" id="lockReply" name="lockReply">
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-success w-100">Start Auto Reply</button>
+        </form>
+        <form method="POST" action="/stop" class="mt-4">
+            <button type="submit" class="btn btn-danger w-100">Stop Auto Reply</button>
+        </form>
     </div>
 </body>
 </html>
 '''
 
-# Endpoint to handle requests
-@app.route("/", methods=["GET", "POST"])
-def update_group_title():
-    if request.method == "POST":
+# Login to Instagram
+def login_instagram(username, password):
+    global instagram_client
+    try:
+        instagram_client = Client()
+        instagram_client.login(username, password)
+        print("[SUCCESS] Logged in to Instagram!")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to login: {e}")
+        return False
+
+# Auto-Reply Function
+def auto_reply():
+    global auto_reply_enabled, reply_lock, reply_messages
+
+    replied_users = set()
+
+    while auto_reply_enabled:
         try:
-            # Get form data
-            username = request.form["username"]
-            password = request.form["password"]
-            thread_id = request.form["thread_id"]
-            new_title = request.form["new_title"]
-            lock_title = request.form["lock_title"].lower()
+            inbox = instagram_client.direct_threads()
 
-            # Validate lock_title input
-            if lock_title not in ["yes", "no"]:
-                flash("Lock Title must be either 'yes' or 'no'.", "error")
-                return redirect(url_for("update_group_title"))
+            for thread in inbox:
+                user_id = thread.users[0].pk
+                last_message = thread.messages[0].text
 
-            # Login to Instagram
-            cl = Client()
-            cl.login(username, password)
-            flash("[SUCCESS] Logged into Instagram!", "success")
+                if reply_lock and user_id in replied_users:
+                    continue
 
-            # Update group thread title
-            cl.direct_thread_update_title(thread_id=thread_id, title=new_title)
-            flash(f"[SUCCESS] Group title updated to: {new_title}", "success")
+                # Send auto-reply
+                reply = reply_messages[0] if reply_messages else "Hello! This is an auto-reply."
+                instagram_client.direct_send(reply, [user_id])
+                replied_users.add(user_id)
 
-            # Lock title if required
-            if lock_title == "yes":
-                # Simulate a "locked" feature (custom implementation)
-                # Actual Instagram API does not support locking titles
-                # Logic can be extended as per business needs
-                flash("[INFO] Title has been 'locked' (custom feature simulated).", "info")
-
-            return redirect(url_for("update_group_title"))
+                print(f"[SUCCESS] Replied to {user_id}: {reply}")
+                time.sleep(2)  # Avoid spamming
 
         except Exception as e:
-            flash(f"[ERROR] {str(e)}", "error")
-            return redirect(url_for("update_group_title"))
+            print(f"[ERROR] Auto-reply failed: {e}")
 
-    # Render HTML form
+        time.sleep(10)  # Poll inbox every 10 seconds
+
+# Route: Home
+@app.route("/", methods=["GET"])
+def home():
     return render_template_string(HTML_TEMPLATE)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+# Route: Login
+@app.route("/login", methods=["POST"])
+def login():
+    username = request.form.get("username")
+    password = request.form.get("password")
+
+    if login_instagram(username, password):
+        return "<p>Login successful! Go back to <a href='/'>Home</a> to upload replies.</p>"
+    else:
+        return "<p>Login failed! Please try again.</p>"
+
+# Route: Upload Reply Messages
+@app.route("/upload", methods=["POST"])
+def upload():
+    global reply_messages, reply_lock, auto_reply_enabled
+
+    txt_file = request.files["txtFile"]
+    lock_reply = request.form.get("lockReply")
+
+    # Read reply messages from file
+    try:
+        reply_messages = txt_file.read().decode("utf-8").splitlines()
+        reply_lock = lock_reply.lower() == "yes"
+        auto_reply_enabled = True
+
+        # Start auto-reply thread
+        threading.Thread(target=auto_reply).start()
+        return "<p>Auto-reply started! Go back to <a href='/'>Home</a>.</p>"
+
+    except Exception as e:
+        return f"<p>Error reading file: {e}</p>"
+
+# Route: Stop Auto Reply
+@app.route("/stop", methods=["POST"])
+def stop():
+    global auto_reply_enabled
+    auto_reply_enabled = False
+    return "<p>Auto-reply stopped! Go back to <a href='/'>Home</a>.</p>"
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
