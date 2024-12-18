@@ -1,112 +1,105 @@
-from flask import Flask, render_template_string, request, flash, redirect, url_for
+from flask import Flask, render_template_string, request, redirect, flash, url_for
 from instagrapi import Client
 import time
 
-# Initialize Flask app
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
 
-# HTML template
+# HTML Template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instagram Group Automation</title>
+    <title>Instagram Group Name Manager</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            background-color: #1e90ff;
-            color: #fff;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
-            margin: 0;
         }
         .container {
-            background-color: #333;
-            padding: 20px;
+            background-color: #ffffff;
+            padding: 30px;
             border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
             max-width: 400px;
             width: 100%;
         }
         h1 {
             text-align: center;
-            color: #ffa500;
+            color: #333;
         }
         label {
             display: block;
-            margin-top: 10px;
             font-weight: bold;
+            margin: 10px 0 5px;
         }
-        input, button {
+        input, select, button {
             width: 100%;
             padding: 10px;
-            margin-top: 10px;
-            border: none;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
             border-radius: 5px;
-            font-size: 16px;
-        }
-        input {
-            background-color: #444;
-            color: #fff;
-        }
-        input:focus {
-            outline: none;
-            background-color: #555;
         }
         button {
-            background-color: #ffa500;
-            color: #000;
-            font-weight: bold;
+            background-color: #007BFF;
+            color: white;
+            border: none;
             cursor: pointer;
         }
         button:hover {
-            background-color: #ff7f50;
+            background-color: #0056b3;
         }
         .message {
-            margin-top: 20px;
+            color: red;
+            font-size: 14px;
             text-align: center;
         }
         .success {
-            color: #32cd32;
-        }
-        .error {
-            color: #ff4500;
+            color: green;
+            font-size: 14px;
+            text-align: center;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Instagram Group Nickname Automation</h1>
+        <h1>Group Name Manager</h1>
         <form action="/" method="POST">
             <label for="username">Instagram Username:</label>
-            <input type="text" id="username" name="username" placeholder="Enter Instagram username" required>
-            
+            <input type="text" id="username" name="username" placeholder="Enter your username" required>
+
             <label for="password">Instagram Password:</label>
-            <input type="password" id="password" name="password" placeholder="Enter Instagram password" required>
+            <input type="password" id="password" name="password" placeholder="Enter your password" required>
 
-            <label for="group_id">Target Group Chat ID:</label>
-            <input type="text" id="group_id" name="group_id" placeholder="Enter group chat ID" required>
-            
-            <label for="nickname">New Nickname:</label>
-            <input type="text" id="nickname" name="nickname" placeholder="Enter new nickname for members" required>
+            <label for="thread_id">Group Thread ID:</label>
+            <input type="text" id="thread_id" name="thread_id" placeholder="Enter group thread ID" required>
 
-            <label for="delay">Delay (seconds):</label>
-            <input type="number" id="delay" name="delay" placeholder="Enter delay between changes" required>
+            <label for="group_name">New Group Name:</label>
+            <input type="text" id="group_name" name="group_name" placeholder="Enter new group name" required>
 
-            <button type="submit">Change Nicknames</button>
+            <label for="lock_group">Lock Group Name:</label>
+            <select id="lock_group" name="lock_group" required>
+                <option value="no">No</option>
+                <option value="yes">Yes</option>
+            </select>
+
+            <button type="submit">Apply Changes</button>
         </form>
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-            <div class="message">
+        <div>
             {% for category, message in messages %}
-                <p class="{{ category }}">{{ message }}</p>
+            <p class="{{ category }}">{{ message }}</p>
             {% endfor %}
-            </div>
+        </div>
         {% endif %}
         {% endwith %}
     </div>
@@ -114,50 +107,49 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-# Route to render form and process input
-@app.route("/", methods=["GET", "POST"])
-def change_group_nicknames():
-    if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
-        group_id = request.form["group_id"]
-        new_nickname = request.form["nickname"]
-        delay = int(request.form["delay"])
+# Lock status dictionary to store locked group names
+lock_status = {}
 
+@app.route("/", methods=["GET", "POST"])
+def manage_group_name():
+    if request.method == "POST":
         try:
+            # Get form data
+            username = request.form["username"]
+            password = request.form["password"]
+            thread_id = request.form["thread_id"]
+            group_name = request.form["group_name"]
+            lock_group = request.form["lock_group"]
+
+            # Check if the group is locked
+            if lock_status.get(thread_id, {}).get("locked", False):
+                flash("This group name is locked and cannot be changed.", "message")
+                return redirect(url_for("manage_group_name"))
+
             # Login to Instagram
             client = Client()
             client.login(username, password)
-            flash("Successfully logged into Instagram.", "success")
 
-            # Fetch group chat members
-            group_thread = client.direct_thread(group_id)
-            if not group_thread:
-                flash("Group not found. Please check the group ID.", "error")
-                return redirect(url_for("change_group_nicknames"))
+            # Change group name
+            client.direct_thread_name(thread_id, group_name)
+            flash(f"Group name successfully changed to '{group_name}'", "success")
 
-            members = group_thread.users
-            flash(f"Found {len(members)} members in the group.", "success")
+            # Handle locking
+            if lock_group == "yes":
+                lock_status[thread_id] = {"locked": True, "name": group_name}
+                flash("Group name has been locked.", "success")
+            else:
+                lock_status.pop(thread_id, None)
 
-            # Change nickname for each member
-            for member in members:
-                try:
-                    client.direct_thread_set_title(group_id, new_nickname)
-                    flash(f"Nickname changed for {member.username} to {new_nickname}.", "success")
-                except Exception as e:
-                    flash(f"Failed to change nickname for {member.username}: {str(e)}", "error")
-                time.sleep(delay)
+            return redirect(url_for("manage_group_name"))
 
-            flash("All nicknames changed successfully.", "success")
         except Exception as e:
-            flash(f"Error: {str(e)}", "error")
+            flash(f"Error: {str(e)}", "message")
+            return redirect(url_for("manage_group_name"))
 
-        return redirect(url_for("change_group_nicknames"))
-
+    # Render the form
     return render_template_string(HTML_TEMPLATE)
 
-
-# Run Flask app
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
-      
+    app.run(debug=True)
+    
