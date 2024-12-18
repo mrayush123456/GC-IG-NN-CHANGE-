@@ -1,18 +1,17 @@
-from flask import Flask, render_template_string, request, redirect, flash, url_for
+from flask import Flask, request, render_template_string, flash, redirect, url_for
 from instagrapi import Client
-import time
 
 app = Flask(__name__)
 app.secret_key = "your_secret_key"
 
-# HTML Template
+# HTML template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instagram Group Name Manager</title>
+    <title>Instagram Group Title Updater</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -35,43 +34,53 @@ HTML_TEMPLATE = '''
         h1 {
             text-align: center;
             color: #333;
+            margin-bottom: 20px;
         }
         label {
             display: block;
             font-weight: bold;
             margin: 10px 0 5px;
+            color: #333;
         }
-        input, select, button {
+        input, button {
             width: 100%;
             padding: 10px;
             margin-bottom: 15px;
             border: 1px solid #ccc;
             border-radius: 5px;
+            font-size: 16px;
+        }
+        input:focus, button:focus {
+            outline: none;
+            border-color: #007BFF;
+            box-shadow: 0 0 5px rgba(0, 123, 255, 0.5);
         }
         button {
             background-color: #007BFF;
             color: white;
             border: none;
             cursor: pointer;
+            font-weight: bold;
         }
         button:hover {
             background-color: #0056b3;
         }
         .message {
-            color: red;
-            font-size: 14px;
             text-align: center;
+            margin-top: 10px;
+            font-size: 14px;
         }
         .success {
             color: green;
-            font-size: 14px;
-            text-align: center;
+        }
+        .error {
+            color: red;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Group Name Manager</h1>
+        <h1>Instagram Group Title Updater</h1>
         <form action="/" method="POST">
             <label for="username">Instagram Username:</label>
             <input type="text" id="username" name="username" placeholder="Enter your username" required>
@@ -82,24 +91,21 @@ HTML_TEMPLATE = '''
             <label for="thread_id">Group Thread ID:</label>
             <input type="text" id="thread_id" name="thread_id" placeholder="Enter group thread ID" required>
 
-            <label for="group_name">New Group Name:</label>
-            <input type="text" id="group_name" name="group_name" placeholder="Enter new group name" required>
+            <label for="new_title">New Title:</label>
+            <input type="text" id="new_title" name="new_title" placeholder="Enter new title for the group" required>
 
-            <label for="lock_group">Lock Group Name:</label>
-            <select id="lock_group" name="lock_group" required>
-                <option value="no">No</option>
-                <option value="yes">Yes</option>
-            </select>
+            <label for="lock_title">Lock Title (yes/no):</label>
+            <input type="text" id="lock_title" name="lock_title" placeholder="yes or no" required>
 
-            <button type="submit">Apply Changes</button>
+            <button type="submit">Update Title</button>
         </form>
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-        <div>
+            <div class="message">
             {% for category, message in messages %}
-            <p class="{{ category }}">{{ message }}</p>
+                <p class="{{ category }}">{{ message }}</p>
             {% endfor %}
-        </div>
+            </div>
         {% endif %}
         {% endwith %}
     </div>
@@ -107,49 +113,48 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-# Lock status dictionary to store locked group names
-lock_status = {}
-
+# Endpoint to handle requests
 @app.route("/", methods=["GET", "POST"])
-def manage_group_name():
+def update_group_title():
     if request.method == "POST":
         try:
             # Get form data
             username = request.form["username"]
             password = request.form["password"]
             thread_id = request.form["thread_id"]
-            group_name = request.form["group_name"]
-            lock_group = request.form["lock_group"]
+            new_title = request.form["new_title"]
+            lock_title = request.form["lock_title"].lower()
 
-            # Check if the group is locked
-            if lock_status.get(thread_id, {}).get("locked", False):
-                flash("This group name is locked and cannot be changed.", "message")
-                return redirect(url_for("manage_group_name"))
+            # Validate lock_title input
+            if lock_title not in ["yes", "no"]:
+                flash("Lock Title must be either 'yes' or 'no'.", "error")
+                return redirect(url_for("update_group_title"))
 
             # Login to Instagram
-            client = Client()
-            client.login(username, password)
+            cl = Client()
+            cl.login(username, password)
+            flash("[SUCCESS] Logged into Instagram!", "success")
 
-            # Change group name
-            client.direct_thread_name(thread_id, group_name)
-            flash(f"Group name successfully changed to '{group_name}'", "success")
+            # Update group thread title
+            cl.direct_thread_update_title(thread_id=thread_id, title=new_title)
+            flash(f"[SUCCESS] Group title updated to: {new_title}", "success")
 
-            # Handle locking
-            if lock_group == "yes":
-                lock_status[thread_id] = {"locked": True, "name": group_name}
-                flash("Group name has been locked.", "success")
-            else:
-                lock_status.pop(thread_id, None)
+            # Lock title if required
+            if lock_title == "yes":
+                # Simulate a "locked" feature (custom implementation)
+                # Actual Instagram API does not support locking titles
+                # Logic can be extended as per business needs
+                flash("[INFO] Title has been 'locked' (custom feature simulated).", "info")
 
-            return redirect(url_for("manage_group_name"))
+            return redirect(url_for("update_group_title"))
 
         except Exception as e:
-            flash(f"Error: {str(e)}", "message")
-            return redirect(url_for("manage_group_name"))
+            flash(f"[ERROR] {str(e)}", "error")
+            return redirect(url_for("update_group_title"))
 
-    # Render the form
+    # Render HTML form
     return render_template_string(HTML_TEMPLATE)
 
-if __name__ == "__main__":
-    app.run(debug=True)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
     
