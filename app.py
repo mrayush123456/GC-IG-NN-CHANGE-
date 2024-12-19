@@ -1,138 +1,111 @@
-from flask import Flask, request, render_template_string, redirect, url_for
-from instagram_private_api import Client, ClientError
+from instagrapi import Client
+from flask import Flask, request, jsonify
 import threading
+import time
 
-# Flask app setup
 app = Flask(__name__)
 
-# HTML Template for the Flask App
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Instagram Group Chat Manager</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            background-color: #f8f9fa;
-            padding: 20px;
-        }
-        .container {
-            max-width: 600px;
-            margin: 50px auto;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0px 4px 10px rgba(0,0,0,0.2);
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1 class="text-center">Instagram Group Chat Manager</h1>
-        <form method="POST" action="/" enctype="multipart/form-data">
-            <div class="mb-3">
-                <label for="username" class="form-label">Instagram Username:</label>
-                <input type="text" class="form-control" id="username" name="username" required>
-            </div>
-            <div class="mb-3">
-                <label for="password" class="form-label">Instagram Password:</label>
-                <input type="password" class="form-control" id="password" name="password" required>
-            </div>
-            <div class="mb-3">
-                <label for="groupId" class="form-label">Target Group Chat ID:</label>
-                <input type="text" class="form-control" id="groupId" name="groupId" required>
-            </div>
-            <div class="mb-3">
-                <label for="nicknames" class="form-label">New Nicknames for All Members (comma-separated):</label>
-                <input type="text" class="form-control" id="nicknames" name="nicknames" required>
-            </div>
-            <div class="mb-3">
-                <label for="groupTitle" class="form-label">New Group Chat Title:</label>
-                <input type="text" class="form-control" id="groupTitle" name="groupTitle" required>
-            </div>
-            <button type="submit" class="btn btn-primary w-100">Update Group Chat</button>
-        </form>
-    </div>
-</body>
-</html>
-'''
+# Global variables
+client = Client()
+chatbot_running = False
+stop_flag = False
 
-# Global stop flag
-STOP_FLAG = False
-
-# Route: Home
-@app.route("/", methods=["GET", "POST"])
-def home():
-    if request.method == "POST":
-        # Form Data
-        username = request.form.get("username")
-        password = request.form.get("password")
-        group_id = request.form.get("groupId")
-        nicknames = request.form.get("nicknames").split(",")
-        group_title = request.form.get("groupTitle")
-
-        # Start a thread to handle Instagram API interactions
-        threading.Thread(
-            target=update_group_chat, args=(username, password, group_id, nicknames, group_title)
-        ).start()
-
-        return "<p>Updating group chat... Check logs for updates.</p>"
-
-    return render_template_string(HTML_TEMPLATE)
-
-
+# Login to Instagram
 def login_instagram(username, password):
-    """
-    Login to Instagram using the private API.
-    """
     try:
-        api = Client(username, password)
-        print("[SUCCESS] Logged into Instagram successfully!")
-        return api
-    except ClientError as e:
-        print(f"[ERROR] Login failed: {e.msg}")
-        return None
-
-
-def update_group_chat(username, password, group_id, nicknames, group_title):
-    """
-    Update the nicknames of group members and the group chat title.
-    """
-    try:
-        # Login to Instagram
-        api = login_instagram(username, password)
-        if not api:
-            return
-
-        # Fetch group chat details
-        print("[INFO] Fetching group chat details...")
-        chat = api.direct_v2_thread(group_id)
-        participants = chat.get("users", [])
-
-        # Update Nicknames
-        for idx, user in enumerate(participants):
-            if idx < len(nicknames):
-                nickname = nicknames[idx].strip()
-                print(f"[INFO] Updating nickname for {user['username']} to '{nickname}'...")
-                api.direct_v2_update_user_nickname(group_id, user["pk"], nickname)
-            else:
-                print(f"[INFO] No nickname provided for {user['username']}. Skipping.")
-
-        # Update Group Chat Title
-        print(f"[INFO] Updating group chat title to '{group_title}'...")
-        api.direct_v2_update_title(group_id, group_title)
-
-        print("[SUCCESS] Group chat updated successfully!")
-
-    except ClientError as e:
-        print(f"[ERROR] Instagram API error: {e.msg}")
+        client.login(username, password)
+        print("[SUCCESS] Logged in to Instagram!")
+        return True
     except Exception as e:
-        print(f"[ERROR] Unexpected error: {e}")
+        print(f"[ERROR] Login failed: {e}")
+        return False
 
+# Fetch all group chats
+def fetch_group_chats():
+    try:
+        inbox = client.direct_threads()
+        groups = [
+            thread for thread in inbox if thread.thread_type == "group"
+        ]
+        return groups
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch group chats: {e}")
+        return []
 
+# Check if group name is locked
+def is_group_name_locked(thread_id):
+    try:
+        thread_info = client.direct_thread(thread_id)
+        return thread_info.is_name_locked
+    except Exception as e:
+        print(f"[ERROR] Could not check group lock status: {e}")
+        return True  # Assume locked if error occurs
+
+# Update group chat name
+def update_group_name(thread_id, new_name):
+    try:
+        if not is_group_name_locked(thread_id):
+            client.direct_thread_update_title(thread_id, new_name)
+            print(f"[SUCCESS] Group chat name updated to '{new_name}'!")
+        else:
+            print("[INFO] Group chat name is locked. Cannot update.")
+    except Exception as e:
+        print(f"[ERROR] Failed to update group chat name: {e}")
+
+# Chatbot function to monitor and update group name
+def chatbot_function(thread_id, delay, new_name):
+    global stop_flag
+    while not stop_flag:
+        update_group_name(thread_id, new_name)
+        time.sleep(delay)
+    print("[INFO] Chatbot stopped.")
+
+# Flask routes
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json
+    username = data.get("username")
+    password = data.get("password")
+    if login_instagram(username, password):
+        return jsonify({"message": "Login successful!"}), 200
+    return jsonify({"message": "Login failed!"}), 400
+
+@app.route("/groups", methods=["GET"])
+def groups():
+    groups = fetch_group_chats()
+    group_list = [{"id": g.thread_id, "name": g.title} for g in groups]
+    return jsonify(group_list), 200
+
+@app.route("/start-chatbot", methods=["POST"])
+def start_chatbot():
+    global chatbot_running, stop_flag
+    data = request.json
+    thread_id = data.get("thread_id")
+    new_name = data.get("new_name")
+    delay = data.get("delay", 60)
+
+    if chatbot_running:
+        return jsonify({"message": "Chatbot is already running!"}), 400
+
+    chatbot_running = True
+    stop_flag = False
+    threading.Thread(target=chatbot_function, args=(thread_id, delay, new_name)).start()
+    return jsonify({"message": "Chatbot started!"}), 200
+
+@app.route("/stop-chatbot", methods=["POST"])
+def stop_chatbot():
+    global chatbot_running, stop_flag
+    stop_flag = True
+    chatbot_running = False
+    return jsonify({"message": "Chatbot stopped!"}), 200
+
+@app.route("/check-lock", methods=["POST"])
+def check_lock():
+    data = request.json
+    thread_id = data.get("thread_id")
+    locked = is_group_name_locked(thread_id)
+    return jsonify({"locked": locked}), 200
+
+# Run Flask app
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-                
